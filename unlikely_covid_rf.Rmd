@@ -1,0 +1,119 @@
+---
+title: "Pets and other unlikely COVID-19 risk factors"
+output: html_notebook
+---
+
+#R version 4.0.0 was used
+
+```{r setup}
+library(tidyverse);
+library(survival);
+library(lubridate);
+library(data.table)
+
+Sys.setlocale("LC_ALL", locale= "English")
+
+```
+
+
+```{r data cleaning, include = F}
+#Database import, large so data.table convenient
+cdmx_v1 <- fread("E:/Protocolos de investigación/CDMX/Actas de defunción/sinave_cdmx_24_05_21.csv")
+
+#Total patients included in database
+num_pacientes_total<-nrow(cdmx_v1) 
+#Patients out of study period
+num_pacientes_fuera_fecha<-nrow(filter(cdmx_v1, fechreg < "2020-02-28"|
+                                         fechreg>"2021-04-05")) 
+#Ambulatory patients
+num_pacientes_ambulatorios<-nrow(filter(cdmx_v1, tipacien == "AMBULATORIO")) 
+
+#Database with appropriate study period and type of patient
+cdmx_v2 <- cdmx_v1[(fechreg >= "2020-02-28"|
+                                         fechreg<="2021-04-05")&
+                     tipacien == "HOSPITALIZADO",]
+```
+
+
+
+```{r}
+cdmx_v3 <- cdmx_v2[,`:=`(fecinisi = ymd(fecinisi),
+                        fecdef = ymd(fecdef),
+                        perros = if_else(str_detect(conanima, "PERR|PERO|PERRI"),T,F),
+                        defuncion = if_else(!is.na(fecdef), T, F))
+                        ][,`:=`(tiempo_sintomas_defuncion = as.numeric(fecdef-fecinisi),
+                          tiempo_sintomas_defuncion_cens_30 = case_when(is.na(fecdef-fecinisi)~ 31,fecdef-fecinisi>30 ~31,
+                                                                        fecdef-fecinisi<=30~as.numeric(fecdef-fecinisi)))][,
+                                                                                                                           defuncion_30d := if_else(defuncion == T &                                                                                         tiempo_sintomas_defuncion <= 30, T, F)][
+                                                                          tiempo_sintomas_defuncion>=0|
+                                                                            is.na(tiempo_sintomas_defuncion),][,
+                                                                                                               privado := if_else(sector == "PRIVADA", T, F)]
+
+
+nrow(cdmx_v3)
+nrow(filter(cdmx_v3, tiempo_sintomas_defuncion <= 30))
+nrow(filter(cdmx_v3, tiempo_sintomas_defuncion <= 30))/nrow(cdmx_v3)
+nrow(filter(cdmx_v3, tiempo_sintomas_defuncion > 30))
+
+nrow(filter(cdmx_v3, conanima != ""))
+
+
+cdmx_v4 <- filter(cdmx_v3, conanima != "")
+
+table(PERROS=cdmx_v4$perros,
+      DEFUNCION = cdmx_v4$defuncion_30d)
+
+#Risk ratio of death in people with dogs
+(1093/(3414+1093))/(8064/(20630+8064))
+
+#Risk ratio with 95% CI
+str_c(round((1093/(3414+1093))/(8064/(20630+8064)),2), 
+      " (",
+      round(exp(log((1093/(3414+1093))/(8064/(20630+8064)))-
+        (1.96*(sqrt(
+          ((3414/1093)/(3414+1093))+
+            ((20630/8064)/(20630+8064)))))),2), "-",
+      round(exp(log((1093/(3414+1093))/(8064/(20630+8064)))+
+        (1.96*(sqrt(
+          ((3414/1093)/(3414+1093))+
+            ((20630/8064)/(20630+8064)))))),2),")")
+
+
+#Re-making the analysis with private hospital as a controlled confounder
+
+table(PERROS=cdmx_v4$perros,
+      DEFUNCION = cdmx_v4$defuncion_30d,
+      PRIVADO = cdmx_v4$privado)
+
+#RR FOR THOSE CARED FOR AT A PRIVATE HOSPITAL
+(29/(345+29))/(236/(236+1912))
+
+str_c(round((29/(345+29))/(236/(236+1912)),2), 
+      " (",
+      round(exp(log((29/(345+29))/(236/(236+1912)))-
+        (1.96*(sqrt(
+          ((345/29)/(345+29))+
+            ((1912/236)/(236+1912)))))),2), "-",
+      round(exp(log((29/(345+29))/(236/(236+1912)))+
+        (1.96*(sqrt(
+          ((345/29)/(345+29))+
+            ((1912/236)/(236+1912)))))),2),")")
+
+
+
+#RR FOR THOSE NOT CARED FOR AT A PRIVATE HOSPITAL
+(1064/(1064+3069))/(7828/(7828+18718))
+
+str_c(round((1064/(1064+3069))/(7828/(7828+18718)),2), 
+      " (",
+      round(exp(log((1064/(1064+3069))/(7828/(7828+18718)))-
+        (1.96*(sqrt(
+          ((3069/1064)/(3069+1064))+
+            ((18718/7828)/(18718+7828)))))),2), "-",
+      round(exp(log((1064/(1064+3069))/(7828/(7828+18718)))+
+        (1.96*(sqrt(
+          ((3069/1064)/(3069+1064))+
+            ((18718/7828)/(18718+7828)))))),2),")")
+
+```
+
