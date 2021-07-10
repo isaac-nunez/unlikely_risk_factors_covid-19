@@ -9,7 +9,8 @@ output: html_notebook
 library(tidyverse);
 library(survival);
 library(lubridate);
-library(data.table)
+library(data.table);
+library(patchwork)
 
 Sys.setlocale("LC_ALL", locale= "English")
 
@@ -18,7 +19,7 @@ Sys.setlocale("LC_ALL", locale= "English")
 
 ```{r data cleaning, include = F}
 #Database import, large so data.table convenient
-cdmx_v1 <- fread("E:/Protocolos de investigación/CDMX/Actas de defunción/sinave_cdmx_24_05_21.csv")
+cdmx_v1 <- fread("C:/Users/User/Documents/Protocolos de investigación/Pets and other risk factors for covid/unlikely_covid_risk_factors/sinave_cdmx_24_05_21.csv")
 
 #Total patients included in database
 num_pacientes_total<-nrow(cdmx_v1) 
@@ -36,84 +37,293 @@ cdmx_v2 <- cdmx_v1[(fechreg >= "2020-02-28"|
 
 
 
-```{r}
+```{r risk ratio data table, include = F, warning = F}
 cdmx_v3 <- cdmx_v2[,`:=`(fecinisi = ymd(fecinisi),
                         fecdef = ymd(fecdef),
-                        perros = if_else(str_detect(conanima, "PERR|PERO|PERRI"),T,F),
+                        perros = ifelse(str_detect(conanima, "PERR|PERO|PERRI"),T,
+                                        ifelse(conanima == "", NA, F)),
                         defuncion = if_else(!is.na(fecdef), T, F))
                         ][,`:=`(tiempo_sintomas_defuncion = as.numeric(fecdef-fecinisi),
                           tiempo_sintomas_defuncion_cens_30 = case_when(is.na(fecdef-fecinisi)~ 31,fecdef-fecinisi>30 ~31,
                                                                         fecdef-fecinisi<=30~as.numeric(fecdef-fecinisi)))][,
-                                                                                                                           defuncion_30d := if_else(defuncion == T &                                                                                         tiempo_sintomas_defuncion <= 30, T, F)][
+                                                                                                                           defuncion_30d := if_else(defuncion == T &                                                                                         tiempo_sintomas_defuncion <= 30, T, F)][,
+                                                                                                                                defuncion_iot_30d := if_else(defuncion_30d == T | intubado == "SI", T, F)][
                                                                           tiempo_sintomas_defuncion>=0|
                                                                             is.na(tiempo_sintomas_defuncion),][,
-                                                                                                               privado := if_else(sector == "PRIVADA", T, F)]
+                                                                                                               `:=`(privado = if_else(sector == "PRIVADA", T, F),
+                                                                                                                    info_pets = if_else(conanima == "", "No info", "Info"),
+                                                                                                                    uso_antivirales = case_when(txantivi == ""~NA,
+                                                                                                                                                txantivi == "SI"~T,
+                                                                                                                                                txantivi == "NO"~F),
+                                                                                                                    tiene_diabetes = case_when(diabetes == ""~NA,
+                                                                                                                                                diabetes == "SI"~T,
+                                                                                                                                                diabetes == "NO"~F),
+                                                                                                                    tiene_hipertension = case_when(hiperten == ""~NA,
+                                                                                                                                                hiperten == "SI"~T,
+                                                                                                                                                hiperten == "NO"~F),
+                                                                                                                    tiene_obesidad = case_when(obesidad == ""~NA,
+                                                                                                                                                obesidad == "SI"~T,
+                                                                                                                                                obesidad == "NO"~F),
+                                                                                                                    edad_sobre_65 = if_else(edad >= 65, T, F),
+                                                                                                                    sexo_hombre = if_else(sexo == "MASCULINO", T, F))]
+
+```
 
 
-nrow(cdmx_v3)
-nrow(filter(cdmx_v3, tiempo_sintomas_defuncion <= 30))
-nrow(filter(cdmx_v3, tiempo_sintomas_defuncion <= 30))/nrow(cdmx_v3)
-nrow(filter(cdmx_v3, tiempo_sintomas_defuncion > 30))
+```{r risk ratio for included variables, include = F}
+#cdmx_v3
 
-nrow(filter(cdmx_v3, conanima != ""))
-
-
-cdmx_v4 <- filter(cdmx_v3, conanima != "")
-
-table(PERROS=cdmx_v4$perros,
-      DEFUNCION = cdmx_v4$defuncion_30d)
-
-#Risk ratio of death in people with dogs
-(1093/(3414+1093))/(8064/(20630+8064))
-
-#Risk ratio with 95% CI
-str_c(round((1093/(3414+1093))/(8064/(20630+8064)),2), 
-      " (",
-      round(exp(log((1093/(3414+1093))/(8064/(20630+8064)))-
+#Function for risk ratio with 95% CI
+rr_95 <- function(x){
+  a <- sum(x[,1]==T&x[,2]==T)
+  b <- sum(x[,1]==T&x[,2]==F)
+  c <- sum(x[,1]==F&x[,2]==T)
+  d <- sum(x[,1]==F&x[,2]==F)
+  
+  str_c(round(
+    (a/(a+c))/(b/(b+d)),2),
+    " (",
+    round(exp(log((a/(a+c))/(b/(b+d)))-
         (1.96*(sqrt(
-          ((3414/1093)/(3414+1093))+
-            ((20630/8064)/(20630+8064)))))),2), "-",
-      round(exp(log((1093/(3414+1093))/(8064/(20630+8064)))+
+          ((c/a)/(c+a))+
+            ((d/b)/(d+b)))))),2),
+    "-",
+    round(exp(log((a/(a+c))/(b/(b+d)))+
         (1.96*(sqrt(
-          ((3414/1093)/(3414+1093))+
-            ((20630/8064)/(20630+8064)))))),2),")")
+          ((c/a)/(c+a))+
+            ((d/b)/(d+b)))))),2),
+    ")")
+  }
+
+#EVALUACION DE FACTORES DE RIESGO DEFUNCION
+rr_hombre <- rr_95(select(cdmx_v3, defuncion_30d, sexo_hombre) %>% filter(!is.na(sexo_hombre)))
+rr_edad <- rr_95(select(cdmx_v3, defuncion_30d, edad_sobre_65) %>% filter(!is.na(edad_sobre_65)))
+rr_antivirales <- rr_95(select(cdmx_v3, defuncion_30d, uso_antivirales) %>% filter(!is.na(uso_antivirales)))
+rr_privado <- rr_95(select(cdmx_v3, defuncion_30d, privado) %>% filter(!is.na(privado)))
+rr_diabetes <- rr_95(select(cdmx_v3, defuncion_30d, tiene_diabetes) %>% filter(!is.na(tiene_diabetes)))
+rr_hipertension <- rr_95(select(cdmx_v3, defuncion_30d, tiene_hipertension) %>% filter(!is.na(tiene_hipertension)))
+rr_obesidad <- rr_95(select(cdmx_v3, defuncion_30d, tiene_obesidad) %>% filter(!is.na(tiene_obesidad)))
+rr_perros <- rr_95(select(cdmx_v3, defuncion_30d, perros) %>% filter(!is.na(perros)))
+
+#Variables con los datos completos
+proporcion_hombre <- str_c(sum(!is.na(cdmx_v3$sexo_hombre)), " (", round((sum(!is.na(cdmx_v3$sexo_hombre))/
+                             length(cdmx_v3$sexo_hombre))*100, 2), "%)")
+
+proporcion_edad <- str_c(sum(!is.na(cdmx_v3$edad_sobre_65)), " (", round((sum(!is.na(cdmx_v3$edad_sobre_65))/
+                             length(cdmx_v3$edad_sobre_65))*100, 2), "%)")
+
+proporcion_antivirales <- str_c(sum(!is.na(cdmx_v3$uso_antivirales)), " (",
+                                round((sum(!is.na(cdmx_v3$uso_antivirales))/
+                             length(cdmx_v3$uso_antivirales))*100, 2), "%)")
+
+proporcion_privado <- str_c(sum(!is.na(cdmx_v3$privado)), " (", round((sum(!is.na(cdmx_v3$privado))/
+                             length(cdmx_v3$privado))*100, 2), "%)")
+
+proporcion_diabetes <- str_c(sum(!is.na(cdmx_v3$tiene_diabetes)), " (", round((sum(!is.na(cdmx_v3$tiene_diabetes))/
+                             length(cdmx_v3$tiene_diabetes))*100, 2), "%)")
+
+proporcion_hipertension <- str_c(sum(!is.na(cdmx_v3$tiene_hipertension)), " (", round((sum(!is.na(cdmx_v3$tiene_hipertension))/
+                             length(cdmx_v3$tiene_hipertension))*100, 2), "%)")
+
+proporcion_obesidad <- str_c(sum(!is.na(cdmx_v3$tiene_obesidad)), " (", round((sum(!is.na(cdmx_v3$tiene_obesidad))/
+                             length(cdmx_v3$tiene_obesidad))*100, 2), "%)")
+
+proporcion_perros <- str_c(sum(!is.na(cdmx_v3$perros)), " (", round((sum(!is.na(cdmx_v3$perros))/
+                             length(cdmx_v3$perros))*100, 2), "%)")
+
+tabla_1 <- data.frame(variables = c("hombre", "edad igual o mayor a 65",
+                                    "uso de antivirales", "hospital privado",
+                                    "diabetes", "hipertension", "obesidad", "tiene perros"),
+                      rr = c(rr_hombre, rr_edad, rr_antivirales, rr_privado, rr_diabetes,rr_hipertension,
+                             rr_obesidad, rr_perros),
+                      numero_datos_completos = c(proporcion_hombre, proporcion_edad,
+                                                 proporcion_antivirales, 
+                                                 proporcion_privado, proporcion_diabetes, 
+                                                 proporcion_hipertension, proporcion_obesidad,
+                                                 proporcion_perros))
+
+```
 
 
-#Re-making the analysis with private hospital as a controlled confounder
-
-table(PERROS=cdmx_v4$perros,
-      DEFUNCION = cdmx_v4$defuncion_30d,
-      PRIVADO = cdmx_v4$privado)
-
-#RR FOR THOSE CARED FOR AT A PRIVATE HOSPITAL
-(29/(345+29))/(236/(236+1912))
-
-str_c(round((29/(345+29))/(236/(236+1912)),2), 
-      " (",
-      round(exp(log((29/(345+29))/(236/(236+1912)))-
-        (1.96*(sqrt(
-          ((345/29)/(345+29))+
-            ((1912/236)/(236+1912)))))),2), "-",
-      round(exp(log((29/(345+29))/(236/(236+1912)))+
-        (1.96*(sqrt(
-          ((345/29)/(345+29))+
-            ((1912/236)/(236+1912)))))),2),")")
+```{r why variables are associated with the outcome, include = F}
 
 
+#BASE PARA LOS PLOTS
+cdmx_v4 <- cdmx_v3 %>% mutate(fecingre=ymd(fecingre),
+                dogs = factor(case_when(perros == T~"Owns dog",
+                                 perros == F~"No dog",
+                                 is.na(perros)~"No data"), levels=
+                                c("Owns dog", "No dog", "No data")),
+                iot_defuncion = factor(if_else(defuncion_iot_30d==T, 
+                                               "MV or death", "No MV or death")))
 
-#RR FOR THOSE NOT CARED FOR AT A PRIVATE HOSPITAL
-(1064/(1064+3069))/(7828/(7828+18718))
+#PLOT TIEMPO
+plot_tiempo <- ggplot(cdmx_v4, aes(x= fecingre, fill = dogs))+
+  geom_bar()+
+  scale_x_date(date_breaks = "2 month",
+               date_labels ="%b %y")+
+  theme_bw()+
+  labs(y="# of people",
+       x="Date (month-year)",
+       title = "A")+
+  scale_fill_brewer(palette = "Dark2")+
+  theme(axis.text.x = element_text(angle = 90, vjust = .25, hjust = 0.95, 
+                                   size = 8, face = "bold", colour="black"),
+        axis.title.x = element_text(face = "bold", size = 10),
+        axis.ticks = element_line(size = 1, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 10),
+        axis.text.y = element_text(size = 8, face = "bold", colour = "black"),
+        plot.title = element_text(size = 12, face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.title = element_blank(),
+        legend.text = element_text(size=7, 
+                                     face="bold"),
+        legend.position = c(.5, .8))
 
-str_c(round((1064/(1064+3069))/(7828/(7828+18718)),2), 
-      " (",
-      round(exp(log((1064/(1064+3069))/(7828/(7828+18718)))-
-        (1.96*(sqrt(
-          ((3069/1064)/(3069+1064))+
-            ((18718/7828)/(18718+7828)))))),2), "-",
-      round(exp(log((1064/(1064+3069))/(7828/(7828+18718)))+
-        (1.96*(sqrt(
-          ((3069/1064)/(3069+1064))+
-            ((18718/7828)/(18718+7828)))))),2),")")
+
+#PLOT IOT O DEFUNCION
+plot_iot_defuncion <- ggplot(cdmx_v4, aes(x= fecingre, fill = dogs))+
+  geom_bar()+
+  facet_wrap(~iot_defuncion)+
+  scale_x_date(date_breaks = "3 month",
+               date_labels ="%b %y")+
+  theme_bw()+
+  labs(y="# of people",
+       x="Date (month-year)",
+       title = "B")+
+  scale_fill_brewer(palette = "Dark2")+
+  theme(axis.text.x = element_text(angle = 90, vjust = .25, hjust = 0.95, 
+                                   size = 8, face = "bold", colour="black"),
+        axis.title.x = element_text(face = "bold", size = 10),
+        axis.ticks = element_line(size = 1, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 10),
+        axis.text.y = element_text(size = 8, face = "bold", colour = "black"),
+        plot.title = element_text(size = 12, face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.position = "none")
+
+
+table(PERROS=cdmx_v4$dogs,
+       IOT_MUERTE = cdmx_v4$iot_defuncion)
+
+table(PERROS=cdmx_v4$dogs,
+       IOT_MUERTE = cdmx_v4$iot_defuncion)/length(cdmx_v4$iot_defuncion)
+
+#PLOT SECTOR
+plot_sector <- ggplot(filter(cdmx_v4, sector != "CRUZ ROJA"&
+                sector != "ESTATAL"& sector != "IMSS-OPORTUNIDADES"&
+                sector != "MUNICIPAL"& sector!="UNIVERSITARIO") , aes(x= fecingre, fill = dogs))+
+  geom_bar()+
+  facet_wrap(~sector)+
+  scale_x_date(date_breaks = "3 month",
+               date_labels ="%b %y")+
+  theme_bw()+
+  labs(y="# of people",
+       x="Date (month-year)",
+       title = "C")+
+  scale_fill_brewer(palette = "Dark2")+
+  theme(axis.text.x = element_text(angle = 90, vjust = .25, hjust = 0.95, 
+                                   size = 8, face = "bold", colour="black"),
+        axis.title.x = element_text(face = "bold", size = 10),
+        axis.ticks = element_line(size = 1, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 10),
+        axis.text.y = element_text(size = 8, face = "bold", colour = "black"),
+        plot.title = element_text(size = 12, face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.position = "none")
+
+
+
+
+#PLOT COMBINADO
+plot_combinado <- plot_tiempo/plot_iot_defuncion/plot_sector
+```
+
+
+```{r plot sobrevida sector, include = F}
+cdmx_v5 <- filter(cdmx_v4, sector != "CRUZ ROJA"&
+                sector != "ESTATAL"& sector != "IMSS-OPORTUNIDADES"&
+                sector != "MUNICIPAL"& sector!="UNIVERSITARIO") %>% 
+  mutate(defuncion = factor(if_else(defuncion_30d == T, "Died", "Survived"),
+                            levels = c("Survived", "Died"))) %>% 
+  group_by(sector, defuncion) %>%
+  count() 
+  
+
+numero_sector <- filter(cdmx_v4, sector != "CRUZ ROJA"&
+                sector != "ESTATAL"& sector != "IMSS-OPORTUNIDADES"&
+                sector != "MUNICIPAL"& sector!="UNIVERSITARIO") %>% 
+  mutate(defuncion = factor(if_else(defuncion_30d == T, "Died", "Survived"),
+                            levels = c("Survived", "Died"))) %>% 
+  group_by(sector) %>% 
+  count() %>% 
+  rename(total=n)
+
+cdmx_v6 <- cdmx_v5 %>% 
+  left_join(numero_sector, by = "sector") %>% 
+  mutate(porcentage =  ifelse(defuncion == "Survived", str_c(round((n/total)*100,1),"%"),
+                              NA))
+
+
+
+plot_sector_2 <- ggplot(cdmx_v5, aes(x= sector, y = n, fill = defuncion))+
+  geom_col()+
+  theme_bw()+
+  labs(y="# of people",
+       x="Health system",
+       title = "")+
+  scale_fill_brewer(palette = "Dark2")+
+  theme(axis.text.x = element_text(angle = 90, vjust = .25, hjust = 0.95, 
+                                   size = 8, face = "bold", colour="black"),
+        axis.title.x = element_text(face = "bold", size = 10),
+        axis.ticks = element_line(size = 1, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 10),
+        axis.text.y = element_text(size = 8, face = "bold", colour = "black"),
+        plot.title = element_text(size = 10, face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.title = element_blank(),
+        legend.text = element_text(size=8, 
+                                     face="bold"),
+        legend.position = c(.5, .8))+
+  geom_text(aes(label = cdmx_v6$porcentage), colour = "black")
+
+```
+
+```{r risk ratio plots, include = F}
+#Plot of people who have info on pets
+plot_1 <- ggplot(cdmx_v3, aes(x= tipacien,  fill = factor(info_pets, levels = c("No info", "Info"))))+
+  geom_bar(position="stack", width = 0.5)+
+  theme_bw()+
+  scale_fill_viridis(discrete = T)+
+  ggtitle("Patients with information on pet ownership")+
+  labs(y="Count",
+       x="")+
+  theme(legend.title = element_blank(),
+        legend.position = c(.85, .5),
+        legend.text = element_text(size=10, 
+                                     face="bold"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_text(face = "bold", size = 14),
+        axis.ticks = element_line(size = 1, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 14),
+        axis.text.y = element_text(size = 14, face = "bold", colour = "black"),
+        plot.title = element_text(size = 14, face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(colour = "black"))
 
 ```
 
